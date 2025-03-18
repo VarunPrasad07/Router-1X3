@@ -1,0 +1,103 @@
+module router_reg(
+    input clock,
+    input resetn,
+    input pkt_valid,
+    input [7:0] data_in,
+    input fifo_full,
+    input rst_in_reg,
+    input detect_add,
+    input ld_state,
+    input laf_state,
+    input full_state,
+    input lfd_state,
+    output reg parity_done,
+    output reg low_pkt_valid,
+    output reg err,
+    output reg [7:0] dout
+);
+    reg [7:0] hold_headerbyte_register;
+    reg [7:0] fifo_fullbyte_register;
+    reg [7:0] internal_parity;
+    reg [7:0] packet_parity;
+
+    // dout logic
+    always @(posedge clock) begin
+        if (!resetn) begin
+            dout <= 8'b0;
+        end else begin
+            if (detect_add && pkt_valid) begin
+                hold_headerbyte_register <= data_in;
+            end else if (lfd_state) begin
+                dout <= hold_headerbyte_register;
+            end else if (ld_state && !fifo_full) begin
+                dout <= data_in;
+            end else if (ld_state && fifo_full) begin
+                fifo_fullbyte_register <= data_in;
+            end else if (laf_state) begin
+                dout <= fifo_fullbyte_register;
+            end
+        end
+    end
+
+    // packet_parity logic
+    always @(posedge clock) begin
+        if (!resetn) begin
+            packet_parity <= 8'b0;
+        end else if (!pkt_valid && ld_state) begin
+            packet_parity <= data_in;
+        end
+    end
+
+    // internal_parity logic
+    always @(posedge clock) begin
+        if (!resetn) begin
+            internal_parity <= 8'b0;
+        end else if (lfd_state) begin
+            internal_parity <= internal_parity ^ hold_headerbyte_register;
+        end else if (ld_state && pkt_valid && !full_state) begin
+            internal_parity <= internal_parity ^ data_in;
+        end else if (detect_add) begin
+            internal_parity <= 8'b0;
+        end
+    end
+
+    // error checking logic (fixes W362)
+    always @(posedge clock) begin
+        if (!resetn) begin
+            err <= 1'b0;
+        end else begin
+            if (!pkt_valid) begin
+                if (internal_parity != packet_parity) begin
+                    err <= 1'b1; // Fixed width mismatch by using `!=` instead of `!==`
+                end else begin
+                    err <= 1'b0;
+                end
+            end
+        end
+    end
+
+    // parity_done logic
+    always @(posedge clock) begin
+        if (!resetn) begin
+            parity_done <= 1'b0;
+        end else begin
+            if ((ld_state && !fifo_full && !pkt_valid) || (laf_state && !pkt_valid)) begin
+                parity_done <= 1'b1;
+            end else begin
+                parity_done <= 1'b0;
+            end
+        end
+    end
+
+    // low_pkt_valid logic (fixes W415a)
+    always @(posedge clock) begin
+        if (!resetn) begin
+            low_pkt_valid <= 1'b0;
+        end else if (rst_in_reg) begin
+            low_pkt_valid <= 1'b0;
+        end else if (ld_state && !pkt_valid) begin
+            low_pkt_valid <= 1'b1;
+        end
+    end
+
+endmodule
